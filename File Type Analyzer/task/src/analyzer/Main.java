@@ -1,111 +1,206 @@
 package analyzer;
 
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public class Main {
+    private static final long a = 53L;
+    private static final long aInverse = 188_679_247L;
+    private static final long m = 1_000_000_009L;
+
+    @FunctionalInterface
+    private interface TriFunction<P1, P2, P3, R> {
+        R call(P1 p1, P2 p2, P3 p3);
+    }
+
     public static void main(String[] args) {
 
-        try  {
-            var xctrSrvc = Executors.newCachedThreadPool();
+        try {
+            var xctr = Executors.newCachedThreadPool();
             Files
                     .list(Paths.get(args[0]))
-                    .map(p -> (Callable<String>) () ->
-                            Files.lines(Paths.get(args[1]))
-                            .map(str -> str.replace("\"", ""))
-                            .map(str -> str.split(";"))
-                            .collect(
-                                    Collectors.toMap(s -> s[1],
-                                            Function.identity(),
-                                            (s, v) -> s,
-                                            HashMap::new))
-                            .entrySet()
-                            .stream()
-                            .filter(e -> {
-                                try {
-                                    return KMP(new String(Files.readAllBytes(p)),
-                                            e.getKey());
-                                } catch (IOException ex) {
-                                    throw new RuntimeException(ex);
-                                }
-                            })
-                            .max(Comparator.comparingInt(
-                                    e -> Integer.parseInt(e.getValue()[0])))
-                            .map(stringEntry -> p +
-                                                 ": " +
-                                           stringEntry.getValue()[2])
-                            .orElseGet(() -> p +
-                                            ": " +
-                                        "Unknown file type"))
-                    .map(xctrSrvc::submit)
-                    .toList()
-                    .forEach(f -> {
-
+                    .map(path -> (Callable<String>) () -> {
                         try {
-                    System.out.println(f.get());
+                            return multiLenRKarp(new String(
+                                            Files.readAllBytes(path)),
+                                             Files
+                                            .lines(Paths.get(args[1]))
+                                            .map(str -> str.replace("\"", ""))
+                                            .map(str -> str.split(";"))
+                                            .collect(Collectors
+                                                    .groupingBy(str -> str[1].length(),
+                                                            HashMap::new,
+                                                            Collectors
+                                                                    .toMap(str -> hashString(str[1]),
+                                                                            Function.identity(),
+                                                                            (str, value) ->
+                                                                                    str,
+                                                                            HashMap::new))))
+                                    .map(str -> path + ": " + str)
+                                    .orElseGet(() -> path + ": " + "Unknown file type");
+                        } catch (IOException e) {
+                            return "ERROR: " + e.getMessage();
+                        }
+                    })
+                    .map(xctr::submit).toList()
+                    .forEach(file -> {
+                try {
+                    System.out.println(file.get());
                 } catch (Exception e){
                     System.out.println("ruh roh");
                 }
             });
 
-            xctrSrvc.shutdown();
+            xctr.shutdown();
 
         } catch (IOException e) {
             System.out.println(e.getMessage());
         }
     }
-
     private static boolean naive(String txt,
-                                 String ptrn) {
-        if (txt.length() < ptrn.length())
+                                  String ptn) {
+        if (txt.length() < ptn.length())
             return false;
         for (int i = 0; i < txt.length() -
-                            ptrn.length() + 1; ++i) {
+                            ptn.length() + 1; ++i) {
+            for (int j = 0; j < ptn.length(); ++j)
 
-            for (int j = 0; j < ptrn.length(); ++j)
-                if (txt.charAt(i + j) != ptrn.charAt(j))
+                if (txt.charAt(i + j) != ptn.charAt(j))
                     break;
-                else if (j == ptrn.length() - 1)
+                else if (j == ptn.length() - 1)
                     return true;
         }
         return false;
     }
 
-    private static boolean KMP(String txt,
-                               String ptrn) {
-        int[] prefixF = prefixFunction(ptrn);
+    private static Optional<String> multiLenRKarp(String txt,
+                                              HashMap<Integer, HashMap<Long, String[]>> lenMap) {
+        return lenMap
+                .values()
+                .stream()
+                .map(strMap -> singleLenRKarp(txt, strMap))
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .max(Comparator.comparingInt(s -> Integer.parseInt(s[0])))
+                .map(s -> s[2]);
+    }
+
+    private static Optional<String[]> singleLenRKarp(String text,
+                                                     HashMap<Long, String[]> idMap) {
+        if (idMap == null || idMap.isEmpty())
+            throw new IllegalArgumentException(
+                    "Empty map passed to singleLengthRabinKarp");
+        var len = idMap
+                          .entrySet()
+                          .stream()
+                          .findAny()
+                          .get()
+                          .getValue()[1]
+                          .length();
+        if (len > text.length())
+            return Optional.empty();
+        var hash = 0L;
+        var pow = 0L;
+        for (var i = 0; i < len; ++i) {
+            if (i == 0) {
+                hash = charToLong(text.charAt(i));
+                pow = 1;
+            } else {
+                pow = Math.floorMod(pow * a,
+                                    m);
+                hash = Math.floorMod(hash +
+                                     charToLong(text.charAt(i)) * pow,
+                                                m);
+            }
+        }
+        String[] match;
+        TriFunction<Integer,
+                   Long,
+                   String[],
+                   String[]> updateMatch = (i, h, m) -> {
+            if (idMap.containsKey(h)) {
+                var typeMatch = idMap.get(h);
+                if (text
+                        .substring(i, i + len)
+                        .equals(typeMatch[1])) {
+                    if (m == null)
+                        m = typeMatch;
+                    else if (Integer.parseInt(m[0]) < Integer.parseInt(typeMatch[0]))
+                        m = typeMatch;
+                }
+            }
+            return m;
+        };
+        match = updateMatch.call(0, hash, null);
+        for (int i = 1; i < text.length() - len + 1; ++i) {
+            hash = Math.floorMod(hash -
+                                charToLong(text.charAt(i - 1)),
+                                 m);
+            hash = Math.floorMod(hash * aInverse, m);
+            hash = Math.floorMod(hash +
+                                 charToLong(text.charAt(i + len - 1)) * pow,
+                                  m);
+            match = updateMatch.call(i, hash, match);
+        }
+        return Optional.ofNullable(match);
+    }
+
+    private static long charToLong(char ch) {
+        return ch - 'A' + 1;
+    }
+
+    private static long hashString(String key) {
+        var hash = 0L;
+        var pow = 0L;
+        for (var i = 0; i < key.length(); ++i) {
+            if (i == 0) {
+                hash = charToLong(key.charAt(i));
+                pow = 1;
+            } else {
+                pow = Math.floorMod(pow * a,
+                                    m);
+                hash = Math.floorMod(hash +
+                                     charToLong(key.charAt(i)) * pow,
+                                      m);
+            }
+        }
+        return hash;
+    }
+    private static boolean KMP(String text,
+                               String ptn) {
+        int[] prefixF = prefixFunction(ptn);
         var j = 0;
-        for (int i = 0; i < txt.length(); ++i) {
-            while (j > 0 && txt.charAt(i) != ptrn.charAt(j))
+        for (var i = 0; i < text.length(); ++i) {
+            while (j > 0 &&
+                    text.charAt(i) != ptn.charAt(j))
                 j = prefixF[j - 1];
-            if (txt.charAt(i) == ptrn.charAt(j))
+            if (text.charAt(i) == ptn.charAt(j))
                 ++j;
-            if (j == ptrn.length())
+            if (j == ptn.length())
                 return true;
         }
         return false;
     }
 
     private static int[] prefixFunction(String str) {
-        int[] prefixF = new int[str.length()];
-        for (int i = 1; i < str.length(); ++i) {
-            int j = prefixF[i - 1];
-            while (j > 0 &&
-                    str.charAt(i) != str.charAt(j))
-                j = prefixF[j - 1];
+        int[] prefixFunc = new int[str.length()];
+        for (var i = 1; i < str.length(); ++i) {
+            var j = prefixFunc[i - 1];
+            while (j > 0
+                    && str.charAt(i) != str.charAt(j))
+                j = prefixFunc[j - 1];
             if (str.charAt(i) == str.charAt(j))
                 ++j;
-            prefixF[i] = j;
+            prefixFunc[i] = j;
         }
-        return prefixF;
+        return prefixFunc;
     }
 }
